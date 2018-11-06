@@ -1,0 +1,590 @@
+<template>
+  <div id="terminal-list">
+    <yp-section icon="asterisk">
+      <span slot="title">概况</span>
+      <div slot="content"
+           class="card-list">
+        <yp-card-list :cardList="cardList">
+        </yp-card-list>
+      </div>
+    </yp-section>
+    <yp-section>
+      <span slot="title">设备列表</span>
+      <div slot="content">
+        <yp-page-table api="/terminal/terminal/list"
+                       :cols="columns"
+                       searchPlaceholder="请输入设备名称，设备编号搜索"
+                       ref="terminalTable">
+        </yp-page-table>
+      </div>
+    </yp-section>
+    <Modal v-model="showCompressorDialog"
+           title="压缩机配置"
+           width="800"
+           :mask-closable="false">
+      <div>
+        <h3 style="margin: 10px 0;">第一步：更改压缩机配置</h3>
+        <Alert>
+          提示：进行此操作时，请确保此处状态与设备压缩机的实际状态保持一致。
+          <template slot="desc">
+            <p>1、此处关闭，设备上的压缩机的应为关闭状态；</p>
+            <p>2、此处开启，设备上的压缩机的应为开启状态。</p>
+          </template>
+        </Alert>
+        <span v-for="(item, index) in form.CabinetConfig"
+              v-if="item.ColdStatus"
+              :key="index"
+              style="margin-right: 20px;">
+          <span style="margin: 0 10px;">{{
+            `${formatCabinetName(item.CabinetName)}柜` }}</span>
+          <i-switch v-model="item.isOpen">
+            <span slot="open">开</span>
+            <span slot="close">关</span>
+          </i-switch>
+        </span>
+        <h3 style="margin: 10px 0;">第二步、更新“价格策略”和“虚拟货架策略”</h3>
+        <Alert>
+          提示：变更压缩机状态时，可能会导致当前的“价格策略”和“虚拟货架策略”不适用，请根据当前压缩机状态，重新配置可用的策略。
+        </Alert>
+        <Form :model="form"
+              :rules="rules"
+              label-position="left"
+              :label-width="100"
+              ref="form">
+          <Row :gutter="50">
+            <Col :span="12">
+            <FormItem label="价格策略"
+                      prop="PriceRuleID">
+              <yp-select url="/product/pricerule/select_list"
+                         v-model="form.PriceRuleID"></yp-select>
+            </FormItem>
+            </Col>
+            <Col :span="12">
+            <FormItem label="虚拟货架"
+                      prop="VirtualShelfID">
+              <yp-select url="/terminal/virtualshelf/select_list"
+                         v-model="form.VirtualShelfID"></yp-select>
+            </FormItem>
+            </Col>
+          </Row>
+        </Form>
+      </div>
+      <span slot="footer">
+        <Button type="primary"
+                @click="handleSaveCompressorConfig">确定</Button>
+      </span>
+    </Modal>
+    <Modal v-model="showVStoreQrcode"
+           title="购买二维码"
+           width="500"
+           :mask-closable="false">
+      <div style="text-align: center;">
+        <img :src="vstoreQrImg"
+             style="width: 400px; height: 400px;">
+        <p style="font-size: 1.1em;">将此二维码保存下来，贴在设备上。消费者可以通过此二维码扫码选购商品</p>
+      </div>
+      <span slot="footer"></span>
+    </Modal>
+    <Modal v-model="showBrandAuth"
+           title="授权品牌商"
+           width="560"
+           :mask-closable="false">
+      <div>
+        <Alert show-icon>
+          提示：请选择您要将此设备授权给哪个品牌商，授权后品牌商将获得此设备的虚拟货架、价格策略、广告播放策略和支付配置，并且授权后只有品牌商可以解除授权
+        </Alert>
+        <div style="margin: 0 auto; padding: 15px 60px; ">
+          授权品牌商
+          <Select v-model="authForm.BID"
+                  style="width: 300px; margin-left: 15px;">
+            <Option v-for="(item, index) in brandList"
+                    :key="index"
+                    :value="item.BID">
+              {{ item.BrandVO.Name }}
+            </Option>
+          </Select>
+        </div>
+      </div>
+      <span slot="footer">
+        <Button class="ivu-btn ivu-btn-text ivu-btn-large"
+                size="large"
+                @click="() => showBrandAuth = false">取消</Button>
+        <Button size="large"
+                type="primary"
+                @click="handleAuth">确定</Button> 
+      </span>
+    </Modal>
+    <Modal v-model="showChangeRecordDialog"
+           title="变更记录"
+           width="800"
+           :mask-closable="false">
+          <Row type="flex" justify="start" align="middle">
+            <Col>
+              <span>变更字段筛选：</span>
+            </Col>
+            <Col>
+              <Select v-model="changeRecordConfig.criteria.Key" placeholder="全部" style="width: 300px; marginLeft: 15px;">
+                <Option v-for="(item, index) in changeFiltrateName" :key="index" :value="item.value">
+                  {{ item.name }}
+                </Option>
+              </Select>
+            </Col>
+          </Row>
+        <Table :columns="changeRecordColumns" :data="changeRecordData" align="center" :border="false" style="margin-top: 10px;"></Table>
+        <Row type="flex" justify="center">
+          <Page :total="changeRecordData.length" size="small" show-elevator show-sizer :page-size-opts="[4, 5, 6, 7, 8, 9]" :page-size="changeRecordConfig.pageSize" @on-change="(page) => changeRecordConfig.page = page" @on-page-size-change="pageSize => changeRecordConfig.pageSize = pageSize" style="margin-top: 10px;"></Page>
+        </Row>
+      <span slot="footer">
+        <Button type="primary"
+                @click="handleChangeRecordDialog">确定</Button>
+      </span>
+    </Modal>
+  </div>
+</template>
+<script>
+import jrQrcode from 'jr-qrcode';
+import YpCardList from '@/components/YpCardList';
+import YpSection from '@/components/YpSection';
+import YpPageTable from '@/components/YpPageTable';
+import YpSelect from '@/components/YpSelect';
+import { methods } from '@/components/tool/tool';
+import { moreBtn, getScreenType } from '@/utils/table';
+import NoviceGuideMixin from '@/components/NoviceGuideMixin';
+
+export default {
+  name: 'terminalList',
+  mixins: [NoviceGuideMixin],
+  data() {
+    return {
+      showAuthBtn: false,
+      brandList: [],
+      showVStoreQrcode: false,
+      showBrandAuth: false,
+      vstoreQrImg: '',
+      columns: [
+        {
+          title: 'ID',
+          key: 'id',
+          display: false,
+          width: 200,
+        },
+        {
+          title: '设备名称',
+          key: 'Name',
+        },
+        {
+          title: '设备编号',
+          key: 'DeviceCode',
+        },
+        {
+          title: '生产编号',
+          key: 'Code',
+        },
+        {
+          title: '厂家',
+          key: 'FactoryName',
+        },
+        {
+          title: '型号',
+          key: 'ProductModel',
+        },
+        {
+          title: '设备类型',
+          key: 'DisplayDirection',
+          render: (h, params) => {
+            const str = getScreenType(params.row);
+            return `${str} - ${params.row.DisplaySize}寸`;
+          },
+        },
+        {
+          title: '货柜数',
+          key: 'CabinetCount',
+          width: 80,
+        },
+        {
+          title: '授权品牌商',
+          key: 'BrandVO',
+          render: (h, { row }) => {
+            if (row.BID) {
+              return row.BrandVO.Name;
+            }
+            return '';
+          },
+        },
+        {
+          title: '售货状态',
+          key: 'EnableSell',
+          align: 'center',
+          width: 120,
+          render: (h, params) => {
+            let color = 'red';
+            let text = '停止售货';
+            if (params.row.EnableSell) {
+              color = 'green';
+              text = '正常售货';
+            }
+            return h('Tag', {
+              props: {
+                color,
+              },
+              style: {
+                // Tag无法自定制颜色，用bg覆盖
+                background: color === 'red' ? '#ccc' : '',
+              },
+            }, text);
+          },
+        },
+        {
+          title: '激活时间',
+          key: 'ActiveAt',
+          render: (h, params) => this.$moment.unix(params.row.ActiveAt).format('YYYY-MM-DD HH:mm:ss'),
+          display: false,
+        },
+        {
+          title: '操作',
+          key: '__actions',
+          align: 'center',
+          width: 300,
+          render: (h, params) => {
+            const btns = [
+              {
+                text: '详情',
+                callback: (data) => {
+                  this.$router.push({
+                    name: 'TerminalDetail',
+                    query: {
+                      id: data.id,
+                    },
+                  });
+                },
+              },
+              {
+                text: '货道初始化配置',
+                class: 'btn-cargo-initialize white-bg',
+                callback: (data) => {
+                  this.$router.push({
+                    name: 'CargoInitialize',
+                    query: { id: data.id },
+                  });
+                },
+              },
+              {
+                text: '压缩机配置',
+                callback: (data) => {
+                  this.showCompressorDialog = true;
+                  this.$refs.form.resetFields();
+                  this.form.id = data.id;
+                  this.form.CabinetConfig = data.CabinetConfig.map((e) => {
+                    let isOpen = false;
+                    if (e.ColdStatus) {
+                      e.CargoConfig.every((item) => {
+                        if (item.ColdStatus) {
+                          isOpen = true;
+                          return false;
+                        }
+                        return true;
+                      });
+                    }
+                    return {
+                      CabinetName: e.CabinetName,
+                      ColdStatus: e.ColdStatus,
+                      isOpen,
+                    };
+                  });
+                  this.form.PriceRuleID = data.Config.PriceRuleID;
+                  this.form.VirtualShelfID = data.Config.VirtualShelfID;
+                },
+              },
+              {
+                text: '购买二维码',
+                callback: (data) => {
+                  this.vstoreQrImg = jrQrcode.getQrBase64(data.VStoreQRCodeUrl);
+                  this.showVStoreQrcode = true;
+                },
+              },
+              {
+                text: '变更记录',
+                callback: (data) => {
+                  this.changeRecordConfig.criteria.TID = data.id;
+                  this.handleChangeRecordDialog();
+                  this.showChangeRecordDialog = true;
+                },
+              },
+            ];
+            if (this.showAuthBtn && !params.row.BID) {
+              btns.push({
+                text: '授权品牌商',
+                callback: () => {
+                  this.showBrandAuth = true;
+                  this.authForm.TID = params.row.id;
+                },
+              });
+            }
+            const ele = h('div', [
+              h('Button', {
+                props: {
+                  size: 'small',
+                  type: 'primary',
+                },
+                style: {
+                  marginRight: '5px',
+                },
+                on: {
+                  click: () => {
+                    let title = '开启售货';
+                    let content = '确认开启售货？';
+                    let EnableSell = true;
+                    if (params.row.EnableSell) {
+                      title = '停止售货';
+                      content = '确认停止售货？';
+                      EnableSell = false;
+                    }
+                    const reqParams = {
+                      EnableSell,
+                      id: params.row.id,
+                    };
+                    this.$Modal.confirm({
+                      title,
+                      content,
+                      onOk: () => {
+                        this.$http.post('/terminal/terminal/update_enablesell', reqParams)
+                          .then((response) => {
+                            if (response.data.error_code === 0) {
+                              // 刷新表格
+                              this.$refs.terminalTable.refreshTable();
+                            }
+                          });
+                      },
+                    });
+                  },
+                },
+              }, params.row.EnableSell ? '停止售货' : '开启售货'),
+              h('Button', {
+                props: {
+                  size: 'small',
+                  type: 'primary',
+                },
+                style: {
+                  marginRight: '5px',
+                },
+                on: {
+                  click: () => {
+                    this.$router.push({
+                      name: 'CargoDetail',
+                      query: {
+                        id: params.row.id,
+                        TID: params.row.Config.TID,
+                      },
+                    });
+                  },
+                },
+              }, '查看货道'),
+              h('Button', {
+                class: 'btn-terminal-config',
+                props: {
+                  size: 'small',
+                  type: 'warning',
+                },
+                style: {
+                  marginRight: '5px',
+                },
+                on: {
+                  click: () => {
+                    this.$router.push({
+                      name: 'TerminalConfig',
+                      query: {
+                        id: params.row.id,
+                        DeviceCode: params.row.DeviceCode,
+                        Code: params.row.Code,
+                      },
+                    });
+                  },
+                },
+              }, '运营配置'),
+              moreBtn(h, btns, params.row),
+            ]);
+            return ele;
+          },
+        },
+      ],
+      cardList: [
+        {
+          icon: 'grid',
+          title: 0,
+          label: '设备总数',
+          color: '#663399',
+        },
+        {
+          icon: 'toggle-filled',
+          title: 0,
+          label: '正在售货设备数',
+          color: '#66CCFF',
+        },
+        {
+          icon: 'wifi',
+          title: 0,
+          label: '在线设备数',
+        },
+      ],
+      showCompressorDialog: false,
+      // 当前操作的行
+      form: {
+        id: '',
+        PriceRuleID: '',
+        VirtualShelfID: '',
+        CabinetConfig: [],
+      },
+      rules: {
+        PriceRuleID: [{ required: true, message: '请选择价格策略' }],
+        VirtualShelfID: [{ required: true, message: '请选择虚拟货架' }],
+      },
+      authForm: {
+        TID: '',
+        BID: '',
+      },
+      // 变更记录相关
+      showChangeRecordDialog: false,
+      changeRecordData: [],
+      changeRecordColumns: [
+        {
+          title: '变更时间',
+          key: 'UpdatedAt',
+          align: 'center',
+          width: 200,
+          render: (h, params) => this.$moment.unix(params.row.UpdatedAt).format('YYYY年MM月DD日 HH:mm:ss'),
+        },
+        {
+          title: '变更字段',
+          key: 'Key',
+          align: 'center',
+          render: (h, params) => params.row.Changes.map(item => h('div', {
+            style: { padding: '1em 0' },
+          }, item.Key)),
+        },
+        {
+          title: '变更前',
+          key: 'BeforeName',
+          align: 'center',
+          render: (h, params) => params.row.Changes.map(item => h('div', {
+            style: { padding: '1em 0' },
+          }, item.BeforeName)),
+        },
+        {
+          title: '变更后',
+          key: 'AfterName',
+          align: 'center',
+          render: (h, params) => params.row.Changes.map(item => h('div', {
+            style: { padding: '1em 0' },
+          }, item.AfterName)),
+        },
+        {
+          title: '操作人',
+          key: 'OperatorName',
+          align: 'center',
+        },
+      ],
+      changeRecordConfig: {
+        id: '',
+        page: 1,
+        pageSize: 4,
+        criteria: {
+          TID: '',
+          Key: '',
+        },
+      },
+      changeFiltrateName: [
+        { name: '补货员', value: 'ReplenisherAccountID' },
+        { name: '场地', value: 'PlaceID' },
+        { name: '价格策略', value: 'PriceRuleID' },
+        { name: '虚拟货架', value: 'VirtualShelfID' },
+        { name: '退款策略', value: 'RefoundsRuleID' },
+      ],
+    };
+  },
+  methods: {
+    ...methods,
+    handleSaveCompressorConfig() {
+      this.$refs.form.validate((valid) => {
+        if (valid) {
+          this.$http.post('/terminal/terminal/set_cold_config', this.form)
+            .then((response) => {
+              if (response.data.error_code === 0) {
+                this.showCompressorDialog = false;
+                this.$refs.terminalTable.refreshTable();
+              }
+            });
+        }
+      });
+    },
+    handleChangeRecordDialog() {
+      this.$request({
+        method: 'terminal.terminal.config.log.list',
+        params: this.changeRecordConfig,
+      }).then((response) => {
+        if (response.error_code === 0) {
+          this.changeRecordData = response.data.data;
+        }
+      });
+    },
+    handleAuth() {
+      this.$request({
+        method: 'terminal.terminal.brand.auth',
+        params: this.authForm,
+        showMsg: true,
+      }).then((data) => {
+        if (data.error_code === 0) {
+          this.showBrandAuth = false;
+          this.$refs.terminalTable.refreshTable(true);
+        }
+      }).catch();
+    },
+    recordModalPageSizeChange(pageSize) {
+      this.changeRecordConfig.pageSize = pageSize;
+    },
+  },
+  watch: {
+    changeRecordConfig: {
+      handler() {
+        this.handleChangeRecordDialog();
+      },
+      deep: true,
+    },
+  },
+  created() {
+    this.$http.get('/terminal/terminal/list_dashboard')
+      .then((response) => {
+        if (response.data.error_code === 0) {
+          const keys = [
+            'TotalCount',
+            'TotalEnableSellCount',
+            'TotalOnlineCount',
+          ];
+          keys.forEach((key, index) => {
+            this.cardList[index].title = response.data.data[key];
+          });
+        }
+      });
+    this.$request({
+      method: 'brand.operators.list',
+    }).then(({ data }) => {
+      if (data.length) {
+        this.showAuthBtn = true;
+        this.authForm.BID = data[0].BID;
+        this.brandList = data;
+      }
+    }).catch();
+  },
+  components: {
+    YpSection,
+    YpPageTable,
+    YpCardList,
+    YpSelect,
+  },
+};
+</script>
+<style lang="less" scoped>
+.card-list {
+	padding: 10px 0;
+	background-color: #ededed;
+}
+</style>
